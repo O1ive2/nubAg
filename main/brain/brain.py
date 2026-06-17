@@ -17,8 +17,11 @@ from ..permission import PermissionManager
 DEFAULT_SYSTEM_PROMPT = (
     "你是一个具备 harvest/memory/brain/sandbox/hands 五大模块的智能 Agent。"
     "回答简洁、准确。\n"
-    "关于记忆：你拥有 recall 工具可以查询长期记忆。遇到与用户相关的提问时，"
-    "请先调用 recall 查看是否有相关记忆，再作回答。"
+    "关于记忆：\n"
+    "- 你拥有 remember 和 recall 工具管理长期记忆。\n"
+    "- 当用户透露个人信息（姓名、职业、偏好等）或对话中出现值得记住的重要事实时，"
+    "主动调用 remember 存入长期记忆，无需用户明确要求。\n"
+    "- 回答与用户相关的问题前，先调用 recall 查看是否有相关记忆。"
 )
 
 
@@ -95,9 +98,12 @@ class Brain:
     # ---------- 推理 ----------
     def _check_pending_interrupt(self, config: dict) -> ThinkResult | None:
         """检查是否有未处理的 interrupt，有则返回它。"""
-        snapshot = self.checkpointer.get(config) if self.checkpointer else None
-        if snapshot and snapshot.tasks:
-            for task in snapshot.tasks:
+        try:
+            state = self._agent.get_state(config)
+        except Exception:  # noqa: BLE001
+            return None
+        if state and state.tasks:
+            for task in state.tasks:
                 if hasattr(task, "interrupts") and task.interrupts:
                     return ThinkResult(pending_approval=task.interrupts[0].value)
         return None

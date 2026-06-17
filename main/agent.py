@@ -1,13 +1,17 @@
 """
 NubAgent 主入口
 ====================================
-编排五大模块：
-- harvest : 信息采集
-- memory  : 短期 + 长期记忆
-- brain   : LLM 推理决策
-- sandbox : 安全执行环境
-- hands   : 工具/动作执行
-- permission : 权限控制
+编排六大模块：
+- harvest   : 信息采集
+- memory    : 短期上下文 + 长期记忆
+- brain     : LLM 推理决策
+- sandbox   : 安全执行环境
+- hands     : 工具/动作执行
+- permission: 权限控制
+
+上下文 vs 记忆：
+- 上下文：当前对话可见，对话结束即消失（短期记忆 + MEMORY.md 索引）
+- 记忆：跨对话持久化，只有 LLM 判断值得记住时才通过 remember 工具主动创建
 """
 from __future__ import annotations
 
@@ -27,7 +31,7 @@ load_dotenv()
 
 
 class NubAgent:
-    """五大模块 + 权限控制组合而成的 Agent。"""
+    """六大模块组合而成的 Agent。"""
 
     def __init__(
         self,
@@ -55,38 +59,31 @@ class NubAgent:
             base_url=base_url or os.getenv("ANTHROPIC_BASE_URL"),
             api_key=api_key or os.getenv("ANTHROPIC_API_KEY"),
             permission=self.permission,
-            compactor=Compactor(),  # 使用默认压缩配置
+            compactor=Compactor(),
         )
 
-    def _inject_memory(self, user_input: str) -> str:
-        """自动召回长期记忆，注入用户输入作为上下文。"""
-        memories = self.long_memory.recall(limit=5)
-        if not memories:
+    # ---------- 上下文注入 ----------
+    def _build_context(self, user_input: str) -> str:
+        """构建输入上下文：MEMORY.md 索引 + 用户输入。"""
+        index = self.long_memory.load_index()
+        if not index.strip():
             return user_input
-        mem_text = "\n".join(
-            f"- [{m.get('tags', [])}] {m['content']}" for m in memories
-        )
-        return f"<memory>\n{mem_text}\n</memory>\n{user_input}"
+        return f"<memory_index>\n{index}</memory_index>\n{user_input}"
 
-    # ---------- 对话----------
+    # ---------- 对话 ----------
     def chat(self, user_input: str, thread_id: str = "default") -> str:
         """一次完整的感知 → 思考 → 审批 → 行动循环。"""
         _ = self.harvester.from_user(user_input)
         config = self.short_memory.make_config(thread_id)
-        enriched = self._inject_memory(user_input)
+        enriched = self._build_context(user_input)
 
         result = self.brain.think(enriched, config=config)
 
-        # 若无中断，直接返回
         if not result.is_interrupt:
             return result.reply or ""
 
-        # 有中断：进入审批循环
         while result.is_interrupt:
-            # 暂停，交给调用方处理审批
-            raise InterruptedError(
-                "NEED_APPROVAL"
-            ) from None
+            raise InterruptedError("NEED_APPROVAL") from None
 
         return result.reply or ""
 
@@ -96,11 +93,10 @@ class NubAgent:
         """带交互式审批的对话（REPL 使用）。"""
         _ = self.harvester.from_user(user_input)
         config = self.short_memory.make_config(thread_id)
-        enriched = self._inject_memory(user_input)
+        enriched = self._build_context(user_input)
 
         result = self.brain.think(enriched, config=config)
 
-        # 审批循环
         while result.is_interrupt:
             info = result.pending_approval or {}
             tool_name = info.get("tool", "未知工具")
@@ -134,21 +130,18 @@ def _repl(thread_id: str = "demo-session") -> None:
     print("=" * 60)
 
     while True:
-        # 1) 读取用户输入
         try:
             user_input = input("\n👤 用户：").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n👋 再见")
             break
 
-        # 2) 空输入跳过；命令退出
         if not user_input:
             continue
         if user_input.lower() in {"exit", "quit", "q", ":q"}:
             print("👋 再见")
             break
 
-        # 3) 调用 Agent，单次异常不退出循环
         try:
             reply = agent.chat_with_approval(user_input, thread_id=thread_id)
             print(f"🤖 Agent：{reply}")
@@ -156,6 +149,8 @@ def _repl(thread_id: str = "demo-session") -> None:
             print("\n⏹  已中断本次回答，可继续提问")
         except Exception as e:  # noqa: BLE001
             print(f"⚠️  Agent 调用失败：{e}")
+
+    agent.short_memory.close()
 
 
 if __name__ == "__main__":

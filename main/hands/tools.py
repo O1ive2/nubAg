@@ -73,16 +73,19 @@ def read_local_file(path: str) -> str:
 
 # ====== Memory 工具 ======
 @tool
-def remember(content: str, tags: Optional[List[str]] = None) -> str:
+def remember(content: str, tags: Optional[List[str]] = None,
+             mem_type: str = "project", description: str = "") -> str:
     """把信息写入长期记忆。
 
     Args:
         content: 要记住的内容
         tags: 可选标签列表
+        mem_type: 记忆类型 (user/feedback/project/reference)
+        description: 一行摘要
     """
     _confirm("remember", {"content": content, "tags": tags})
-    item_id = _long_memory.remember(content, tags=tags)
-    return f"已记住，id={item_id}"
+    name = _long_memory.remember(content, tags=tags, mem_type=mem_type, description=description)
+    return f"已记住，name={name}"
 
 
 @tool

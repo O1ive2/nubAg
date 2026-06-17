@@ -119,19 +119,23 @@ class NubAgent:
 # ====== 交互式 REPL ======
 def _repl(thread_id: str = "demo-session") -> None:
     """启动一个持续对话循环，输入 exit/quit/q 退出，Ctrl+C 中断当前回答。"""
+    from prompt_toolkit import prompt as pt_prompt
+    from prompt_toolkit.history import InMemoryHistory
+
     agent = NubAgent()
+    history = InMemoryHistory()
     print("=" * 60)
     print("🤖 NubAgent 已启动")
     print(f"   model    : {agent.brain.model}")
     print(f"   base_url : {agent.brain.base_url}")
     print(f"   thread   : {thread_id}")
     print("   提示：输入 exit / quit / q 退出；Ctrl+C 中断当前回答；")
-    print("        Ctrl+D（或在空输入按回车两次）也可退出。")
+    print("        上/下方向键浏览历史；Ctrl+D 退出。")
     print("=" * 60)
 
     while True:
         try:
-            user_input = input("\n👤 用户：").strip()
+            user_input = pt_prompt("\n👤 用户：", history=history).strip()
         except (EOFError, KeyboardInterrupt):
             print("\n👋 再见")
             break

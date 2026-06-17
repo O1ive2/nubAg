@@ -16,7 +16,7 @@ class ShortTermMemory:
     def __init__(self, db_path: str | Path = ".agent_memory/checkpoint.db") -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = __import__("sqlite3").connect(str(self._db_path))
+        self._conn = __import__("sqlite3").connect(str(self._db_path), check_same_thread=False)
         self._saver = SqliteSaver(self._conn)
         self._saver.setup()
 

@@ -7,6 +7,7 @@ NubAgent 主入口
 - brain   : LLM 推理决策
 - sandbox : 安全执行环境
 - hands   : 工具/动作执行
+- permission : 权限控制
 """
 from __future__ import annotations
 
@@ -19,12 +20,14 @@ from main.brain import Brain
 from main.hands import default_toolset
 from main.harvest import Harvester
 from main.memory import LongTermMemory, ShortTermMemory
+from main.memory.compactor import Compactor
+from main.permission import PermissionManager
 
 load_dotenv()
 
 
 class NubAgent:
-    """五大模块组合而成的 Agent。"""
+    """五大模块 + 权限控制组合而成的 Agent。"""
 
     def __init__(
         self,
@@ -32,15 +35,18 @@ class NubAgent:
         system_prompt: Optional[str] = None,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
+        permission: Optional[PermissionManager] = None,
     ) -> None:
         # 感知
         self.harvester = Harvester()
         # 记忆
         self.short_memory = ShortTermMemory()
         self.long_memory = LongTermMemory()
-        # 双手（工具集）
-        self.tools = default_toolset()
-        # 大脑（接入自定义网关，全部走环境变量，无硬编码）
+        # 权限
+        self.permission = permission or PermissionManager()
+        # 双手（工具集 + 权限）
+        self.tools = default_toolset(permission=self.permission)
+        # 大脑
         self.brain = Brain(
             model=model or os.getenv("ANTHROPIC_MODEL", "Claude-Sonnet-4.6"),
             tools=self.tools,
@@ -48,16 +54,70 @@ class NubAgent:
             checkpointer=self.short_memory.checkpointer,
             base_url=base_url or os.getenv("ANTHROPIC_BASE_URL"),
             api_key=api_key or os.getenv("ANTHROPIC_API_KEY"),
+            permission=self.permission,
+            compactor=Compactor(),  # 使用默认压缩配置
         )
+
+    def _inject_memory(self, user_input: str) -> str:
+        """自动召回长期记忆，注入用户输入作为上下文。"""
+        memories = self.long_memory.recall(limit=5)
+        if not memories:
+            return user_input
+        mem_text = "\n".join(
+            f"- [{m.get('tags', [])}] {m['content']}" for m in memories
+        )
+        return f"<memory>\n{mem_text}\n</memory>\n{user_input}"
 
     # ---------- 对话----------
     def chat(self, user_input: str, thread_id: str = "default") -> str:
-        """一次完整的感知 → 思考 → 行动循环。"""
-        # 1) harvest：把用户输入结构化（这里只做最小封装）
+        """一次完整的感知 → 思考 → 审批 → 行动循环。"""
         _ = self.harvester.from_user(user_input)
-        # 2) brain：思考 + 通过 hands 调工具 + 走 sandbox 执行
         config = self.short_memory.make_config(thread_id)
-        return self.brain.think(user_input, config=config)
+        enriched = self._inject_memory(user_input)
+
+        result = self.brain.think(enriched, config=config)
+
+        # 若无中断，直接返回
+        if not result.is_interrupt:
+            return result.reply or ""
+
+        # 有中断：进入审批循环
+        while result.is_interrupt:
+            # 暂停，交给调用方处理审批
+            raise InterruptedError(
+                "NEED_APPROVAL"
+            ) from None
+
+        return result.reply or ""
+
+    def chat_with_approval(
+        self, user_input: str, thread_id: str = "default"
+    ) -> str:
+        """带交互式审批的对话（REPL 使用）。"""
+        _ = self.harvester.from_user(user_input)
+        config = self.short_memory.make_config(thread_id)
+        enriched = self._inject_memory(user_input)
+
+        result = self.brain.think(enriched, config=config)
+
+        # 审批循环
+        while result.is_interrupt:
+            info = result.pending_approval or {}
+            tool_name = info.get("tool", "未知工具")
+            tool_args = info.get("args", {})
+
+            print(f"\n🔑 Agent 请求执行工具: {tool_name}")
+            print(f"   参数: {tool_args}")
+
+            answer = input("   允许执行？[y/n]: ").strip().lower()
+            approved = answer in {"y", "yes", "是"}
+
+            result = self.brain.resume(approved, config=config)
+
+            if not approved and not result.is_interrupt:
+                return result.reply or "用户拒绝了工具调用。"
+
+        return result.reply or ""
 
 
 # ====== 交互式 REPL ======
@@ -78,7 +138,7 @@ def _repl(thread_id: str = "demo-session") -> None:
         try:
             user_input = input("\n👤 用户：").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n� 再见")
+            print("\n👋 再见")
             break
 
         # 2) 空输入跳过；命令退出
@@ -90,7 +150,7 @@ def _repl(thread_id: str = "demo-session") -> None:
 
         # 3) 调用 Agent，单次异常不退出循环
         try:
-            reply = agent.chat(user_input, thread_id=thread_id)
+            reply = agent.chat_with_approval(user_input, thread_id=thread_id)
             print(f"🤖 Agent：{reply}")
         except KeyboardInterrupt:
             print("\n⏹  已中断本次回答，可继续提问")

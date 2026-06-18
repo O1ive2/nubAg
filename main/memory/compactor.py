@@ -1,5 +1,5 @@
 """
-上下文压缩：当对话消息超出阈值时，用 LLM 将旧消息压缩为摘要，
+上下文压缩：当对话消息 token 数超出阈值时，用 LLM 将旧消息压缩为摘要，
 防止超出模型上下文窗口。
 
 策略：
@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, trim_messages
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 
 SUMMARY_PROMPT = (
@@ -18,8 +18,18 @@ SUMMARY_PROMPT = (
 )
 
 # 默认配置
-DEFAULT_MAX_MESSAGES = 40  # 超过此条数触发压缩
-DEFAULT_KEEP_RECENT = 10   # 始终保留最近 N 条
+DEFAULT_MAX_TOKENS = 80000   # 超过此 token 数触发压缩
+DEFAULT_KEEP_RECENT = 10    # 始终保留最近 N 条
+CHARS_PER_TOKEN = 4         # 粗估：1 token ≈ 4 字符（中英混合）
+
+
+def _estimate_tokens(messages: list[BaseMessage]) -> int:
+    """粗估消息列表的 token 数（基于字符数 / 4）。"""
+    total = 0
+    for msg in messages:
+        content = msg.content if isinstance(msg.content, str) else str(msg.content)
+        total += len(content)
+    return total // CHARS_PER_TOKEN
 
 
 class Compactor:
@@ -28,17 +38,17 @@ class Compactor:
     def __init__(
         self,
         llm: object | None = None,
-        max_messages: int = DEFAULT_MAX_MESSAGES,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         keep_recent: int = DEFAULT_KEEP_RECENT,
     ) -> None:
         self.llm = llm
-        self.max_messages = max_messages
+        self.max_tokens = max_tokens
         self.keep_recent = keep_recent
         self._summary: str = ""  # 累积摘要
 
     def compact(self, messages: list[BaseMessage]) -> list[BaseMessage]:
-        """压缩消息列表：超阈值时摘要旧消息，始终保留最近 N 条。"""
-        if len(messages) <= self.max_messages:
+        """压缩消息列表：超 token 阈值时摘要旧消息，始终保留最近 N 条。"""
+        if _estimate_tokens(messages) <= self.max_tokens:
             return messages
 
         # 分割：旧消息 + 最近消息

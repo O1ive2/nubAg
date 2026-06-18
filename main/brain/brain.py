@@ -52,10 +52,10 @@ class Brain:
         max_tokens: int = 2048,
         permission: Optional[PermissionManager] = None,
         compactor: Optional[Compactor] = None,
+        memory_index: str = "",
     ) -> None:
         self.model = model
         self.tools = list(tools or [])
-        self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
         self.checkpointer = checkpointer
         self.permission = permission or PermissionManager()
         self.compactor = compactor
@@ -64,6 +64,12 @@ class Brain:
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         self.temperature = temperature
         self.max_tokens = max_tokens
+
+        # 组合系统提示：基础 prompt + 记忆索引
+        prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
+        if memory_index.strip():
+            prompt += f"\n\n<memory_index>\n{memory_index.strip()}\n</memory_index>"
+        self.system_prompt = prompt
 
         self.llm = self._build_llm()
         self._agent = self._build_agent()

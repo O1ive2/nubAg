@@ -50,7 +50,7 @@ class NubAgent:
         self.permission = permission or PermissionManager()
         # 双手（工具集 + 权限）
         self.tools = default_toolset(permission=self.permission)
-        # 大脑
+        # 大脑（记忆索引注入系统提示）
         self.brain = Brain(
             model=model or os.getenv("ANTHROPIC_MODEL", "Claude-Sonnet-4.6"),
             tools=self.tools,
@@ -60,24 +60,16 @@ class NubAgent:
             api_key=api_key or os.getenv("ANTHROPIC_API_KEY"),
             permission=self.permission,
             compactor=Compactor(),
+            memory_index=self.long_memory.load_index(),
         )
-
-    # ---------- 上下文注入 ----------
-    def _build_context(self, user_input: str) -> str:
-        """构建输入上下文：MEMORY.md 索引 + 用户输入。"""
-        index = self.long_memory.load_index()
-        if not index.strip():
-            return user_input
-        return f"<memory_index>\n{index}</memory_index>\n{user_input}"
 
     # ---------- 对话 ----------
     def chat(self, user_input: str, thread_id: str = "default") -> str:
         """一次完整的感知 → 思考 → 审批 → 行动循环。"""
         _ = self.harvester.from_user(user_input)
         config = self.short_memory.make_config(thread_id)
-        enriched = self._build_context(user_input)
 
-        result = self.brain.think(enriched, config=config)
+        result = self.brain.think(user_input, config=config)
 
         if not result.is_interrupt:
             return result.reply or ""
@@ -93,9 +85,8 @@ class NubAgent:
         """带交互式审批的对话（REPL 使用）。"""
         _ = self.harvester.from_user(user_input)
         config = self.short_memory.make_config(thread_id)
-        enriched = self._build_context(user_input)
 
-        result = self.brain.think(enriched, config=config)
+        result = self.brain.think(user_input, config=config)
 
         while result.is_interrupt:
             info = result.pending_approval or {}
